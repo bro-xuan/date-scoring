@@ -204,18 +204,6 @@ body{
   font-size:0.95rem;line-height:1.8;color:var(--text);
   font-style:italic;letter-spacing:0.01em;
 }
-.profile-loading{
-  display:flex;align-items:center;justify-content:center;gap:12px;
-  padding:20px 0;color:var(--muted);font-style:italic;font-size:0.9rem;
-}
-.loading-spinner{
-  width:32px;height:32px;border:3px solid var(--border);
-  border-top-color:var(--gold);border-radius:50%;
-  animation:spin .8s linear infinite;
-}
-@keyframes spin{to{transform:rotate(360deg)}}
-.profile-fade-in{animation:profileFadeIn .5s ease-in}
-@keyframes profileFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
 /* Trait summary columns */
 .trait-summary-cols{
@@ -388,9 +376,6 @@ const TIERS = [
 const checked = {}; // "catIdx_traitIdx" -> bool
 let currentStep = 0; // 0 = start, 1-8 = categories, 9 = results
 const TOTAL_STEPS = DATA.length; // 8
-const GROQ_API_KEY = localStorage.getItem('groq_api_key')||'';
-let cachedAIProfile = null;
-let aiProfilePending = false;
 
 function getTier(score){
   return TIERS.find(t=>score>=t.min);
@@ -427,7 +412,7 @@ function getCheckedTraits(){
   return {reds,greens};
 }
 
-// ── Trait-theme mapping (shared by generateProfile + generateAIProfile) ──
+// ── Trait-theme mapping ──
 const T={
     // Communication
     "One-Word Texter":{g:"unavailable",d:"monosyllabic digital correspondence"},
@@ -501,93 +486,163 @@ const T={
     "Genuinely Curious About You":{g:"keeper",d:"authentic interpersonal curiosity (asks AND listens)"},
 };
 
-// ── Profile generator ──
-function generateProfile(){
-  // Theme metadata: intro templates + closers (multiple options per theme, picked by trait-count seed)
-  const M={
-    "unavailable":{
-      i:["The subject's emotional availability registers somewhere between 'out of office' and 'permanently relocated.'",
-         "From a responsiveness standpoint, you rank somewhere between her spam folder and a push notification she hasn't enabled."],
-      c:["You are not being ghosted — you are being systematically deprioritized with plausible deniability.",
-         "The prognosis for consistent emotional reciprocity is, clinically speaking, grim."]
-    },
-    "disengaged":{
-      i:["The subject's attention during in-person encounters is best described as 'physically present, digitally elsewhere.'",
-         "Her engagement level during dates hovers somewhere between 'waiting room' and 'on hold with customer service.'"],
-      c:["You are not a companion — you are ambient background noise while she scrolls.",
-         "Competing with a 6-inch screen for eye contact is a battle no amount of charm can win."]
-    },
-    "self-absorbed":{
-      i:["The conversational dynamic reveals a pronounced asymmetry in topic distribution."],
-      c:["You are not a participant in dialogue — you are a captive audience with a dinner reservation."]
-    },
-    "difficult":{
-      i:["The interpersonal friction coefficient here warrants a dedicated risk assessment.",
-         "The operational overhead of this relationship registers in the upper percentile of the maintenance spectrum."],
-      c:["Patience, in this context, is not a virtue — it is a full-time job requirement.",
-         "The energy expenditure required to maintain equilibrium may exceed any conceivable return on investment."]
-    },
-    "chaotic":{
-      i:["The chaos index on this individual is, by any standard metric, elevated.",
-         "Her life operates less on routine and more on a crisis-to-crisis momentum that would exhaust a first responder."],
-      c:["Predictability is not on the menu. Neither, to be fair, is boredom.",
-         "Strap in — this is less a relationship and more a weather event."]
-    },
-    "delusional":{
-      i:["The subject's relationship with objective reality is best described as 'loosely affiliated.'",
-         "A recurring pattern of reality-adjacent thinking emerges across multiple data points."],
-      c:["The gap between self-perception and observable behavior could comfortably house a mid-size sedan.",
-         "Corrective perspective is strongly recommended, though unlikely to be accepted."]
-    },
-    "image-obsessed":{
-      i:["Image management appears to be the primary occupation, with actual life serving as raw content.",
-         "Considerable resources are devoted to curating a public-facing identity that may diverge significantly from the source material."],
-      c:["The curated self has largely consumed the actual self — you are, in practice, dating a brand.",
-         "What you see is, by careful design, not what you get."]
-    },
-    "trust-issue":{
-      i:["Several behavioral indicators suggest the trust infrastructure in this dynamic is structurally compromised.",
-         "The trust profile here exhibits load-bearing cracks that merit serious inspection."],
-      c:["Transparency, in this relationship, is a theoretical concept — not an operational policy.",
-         "The foundation you'd be building on has pre-existing fractures. Proceed with engineering-grade caution."]
-    },
-    "financial-risk":{
-      i:["The financial trajectory of this relationship resembles a leveraged position with unlimited downside exposure.",
-         "An analysis of spending patterns versus income generation reveals a deficit model you are expected to personally subsidize."],
-      c:["Your wallet is not an accessory in this arrangement — it is load-bearing infrastructure.",
-         "The ROI calculation on this relationship requires a spreadsheet, a stiff drink, and a strong stomach."]
-    },
-    "low-effort":{
-      i:["The effort-to-output ratio across key life domains suggests a deep philosophical commitment to the status quo."],
-      c:["Growth is not on the roadmap. Comfortable stagnation is both the destination and the journey."]
-    },
-    "wild-card":{
-      i:["Certain data points here defy conventional categorization, occupying what risk analysts call 'the tail of the distribution.'"],
-      c:["These are not red flags so much as signal flares visible from low orbit."]
-    },
-    "ick":{
-      i:["The visceral-response indicators — colloquially, 'the ick' — have registered at clinically notable levels.",
-         "Certain observed behaviors trigger involuntary aversion responses that no amount of rational override can suppress."],
-      c:["These are not mere preferences — they are neurological events. The ick does not negotiate.",
-         "Once observed, these cannot be un-observed. They will resurface unprompted at 3 AM. Guaranteed."]
-    },
-    "situational":{
-      i:["Beyond personality, several situational variables introduce logistical complexity to the relationship calculus."],
-      c:["These are not character flaws per se — they are circumstantial factors that nonetheless affect the cost-benefit analysis."]
-    },
-    "eccentric":{
-      i:["The subject demonstrates lifestyle choices that fall comfortably outside standard deviation."],
-      c:["Eccentricity is not inherently disqualifying, but it does require a flexible definition of 'normal.'"]
-    },
-    "keeper":{
-      i:["On the credit side of the ledger, empirically validated positive indicators present themselves.",
-         "The green-flag cluster here deserves recognition — these are not trivial virtues in the current dating market."],
-      c:["These traits represent genuine long-term relationship capital. Weight them accordingly in your final calculus.",
-         "In a dating pool where the bar is famously subterranean, she clears it with room to spare on these dimensions."]
-    }
-  };
+// ── Profile generator: COLLECT → CLASSIFY → COMPOSE → SEAL pipeline ──
 
-  // ── Collect checked traits with their theme tags ──
+// 3a. Seed functions for deterministic variety
+function primarySeed(score,redCount,greenCount){
+  return Math.abs(score*7+redCount*13+greenCount*19);
+}
+function secondarySeed(items){
+  let h=0;
+  for(let i=0;i<items.length;i++) h=(h*31+items[i].name.charCodeAt(0))>>>0;
+  return h;
+}
+function pick(arr,seed){return arr[seed%arr.length];}
+
+// 3b. Strategy classifier
+function classifyTier(score){
+  if(score>=95) return 'wifey';
+  if(score>=80) return 'solid';
+  if(score>=60) return 'caution';
+  if(score>=40) return 'situationship';
+  if(score>=20) return 'streets';
+  if(score>=0) return 'run';
+  return 'witness_protection';
+}
+
+// 3c. Trait weavers — combine 1, 2, or 3+ descriptions into prose
+function weaveTraits(descs,seed){
+  if(descs.length===0) return '';
+  if(descs.length===1) return descs[0];
+  if(descs.length===2){
+    const t=[
+      (a,b)=>`${a} paired with ${b}`,
+      (a,b)=>`${a} and, compounding matters, ${b}`,
+      (a,b)=>`${a} alongside ${b}`
+    ];
+    return pick(t,seed)(descs[0],descs[1]);
+  }
+  const t=[
+    ds=>`${ds.slice(0,-1).join(', ')}, and ${ds[ds.length-1]}`,
+    ds=>`${ds[0]}, ${ds[1]}, and ${ds.length>3?ds.slice(2).join(', '):ds[2]}`,
+    ds=>`a constellation including ${ds.slice(0,-1).join(', ')}, and ${ds[ds.length-1]}`
+  ];
+  return pick(t,seed)(descs);
+}
+
+// 3c. Theme commentary — punchy one-liners per theme tag
+const THEME_LINES={
+  "unavailable":["Her communication style makes carrier pigeons look responsive.","You rank somewhere between her spam folder and a push notification she hasn't enabled.","Emotional availability: out of office, return date pending."],
+  "disengaged":["You are not a companion — you are ambient background noise while she scrolls.","Her phone gets more eye contact than you do.","Competing with a 6-inch screen for attention is a losing proposition."],
+  "self-absorbed":["You are not a participant in dialogue — you are a captive audience with a dinner reservation.","The conversational dynamic features a pronounced asymmetry in topic distribution.","Every conversation is a one-woman TED Talk you didn't sign up for."],
+  "difficult":["The operational overhead of this relationship registers in the upper percentile of the maintenance spectrum.","Patience here is not a virtue — it is a full-time job requirement.","The energy expenditure required to maintain equilibrium may exceed any conceivable return."],
+  "chaotic":["Her life operates on a crisis-to-crisis momentum that would exhaust a first responder.","Predictability is not on the menu. Neither, to be fair, is boredom.","Strap in — this is less a relationship and more a weather event."],
+  "delusional":["The gap between self-perception and observable behavior could comfortably house a mid-size sedan.","Her relationship with objective reality is best described as 'loosely affiliated.'","A recurring pattern of reality-adjacent thinking emerges across the data."],
+  "image-obsessed":["The curated self has largely consumed the actual self — you are, in practice, dating a brand.","What you see is, by careful design, not what you get.","Image management is the primary occupation; actual life serves as raw content."],
+  "trust-issue":["The trust infrastructure here is structurally compromised.","Transparency in this dynamic is a theoretical concept, not an operational policy.","The foundation you'd build on has pre-existing fractures."],
+  "financial-risk":["Your wallet is not an accessory in this arrangement — it is load-bearing infrastructure.","The ROI calculation requires a spreadsheet, a stiff drink, and a strong stomach.","She treats your finances as a shared resource — without the sharing part."],
+  "low-effort":["Growth is not on the roadmap. Comfortable stagnation is both the destination and the journey.","The effort-to-output ratio suggests a philosophical commitment to the status quo.","Ambition levels register at 'comfortably flatlined.'"],
+  "wild-card":["These are not red flags so much as signal flares visible from low orbit.","Certain data points defy conventional categorization — welcome to the tail of the distribution.","Risk analysts would classify this under 'genuinely unprecedented.'"],
+  "ick":["The ick does not negotiate. These are neurological events, not preferences.","Once observed, these cannot be un-observed. They will resurface at 3 AM. Guaranteed.","Certain behaviors trigger involuntary aversion that no amount of charm can override."],
+  "situational":["These are not character flaws per se — circumstantial factors that affect the cost-benefit analysis.","Beyond personality, logistical complexity enters the calculus.","The situation introduces variables that personality alone cannot resolve."],
+  "eccentric":["Eccentricity is not disqualifying, but it requires a flexible definition of 'normal.'","Lifestyle choices comfortably outside standard deviation detected.","Unconventional is one word. Concerning is another. The truth is somewhere between."]
+};
+
+// 3c. Template fragment library
+
+const GREEN_LEAD=[
+  (traits,commentary)=>`The subject presents a remarkably clean dossier. The evidence — ${traits} — paints a portrait of genuine long-term relationship capital. ${commentary}`,
+  (traits,commentary)=>`The green-flag portfolio here is, by any objective metric, substantial. Documented strengths include ${traits}. ${commentary}`,
+  (traits,commentary)=>`On initial assessment, the data is encouraging. Key indicators: ${traits}. In a dating pool where the bar is famously subterranean, she clears it with daylight to spare. ${commentary}`
+];
+
+const RED_LEAD=[
+  (traits,commentary)=>`The primary concerns emerge early and often. The dossier catalogs ${traits}. ${commentary}`,
+  (traits,commentary)=>`A pattern of risk factors dominates the assessment. Chief among them: ${traits}. ${commentary}`,
+  (traits,commentary)=>`The data paints a concerning picture from the opening line. Field observations include ${traits}. ${commentary}`
+];
+
+const RED_ROAST=[
+  (traits,commentary)=>`The subject's behavioral profile reads less like a dating prospect and more like a cautionary tale distributed at orientation. Documented evidence: ${traits}. ${commentary}`,
+  (traits,commentary)=>`Where to begin. The clinical record presents ${traits} — each item alone warrants concern; together, they constitute a symphony of red flags. ${commentary}`,
+  (traits,commentary)=>`The file on this individual was flagged by the system before a human even opened it. Highlights include ${traits}. ${commentary}`
+];
+
+const RED_CATASTROPHE=[
+  (traits,commentary)=>`This is not a personality profile — it is a disaster assessment. The subject exhibits ${traits}. ${commentary} The threat level has been upgraded from 'concerning' to 'existential.'`,
+  (traits,commentary)=>`The dossier arrived pre-stamped with a biohazard warning. Analysis reveals ${traits}. ${commentary} The data doesn't just suggest risk — it files a restraining order on your behalf.`
+];
+
+const BALANCED_OPEN=[
+  (gTraits,rTraits)=>`The committee is split on this one. On the positive side of the ledger: ${gTraits}. On the other side, the file also contains ${rTraits}.`,
+  (gTraits,rTraits)=>`This is a study in contradictions. The subject demonstrates genuine strengths — ${gTraits} — while simultaneously presenting ${rTraits}.`,
+  (gTraits,rTraits)=>`The assessment panel has convened and remains, diplomatically, divided. Green-flag evidence includes ${gTraits}. Red-flag evidence counters with ${rTraits}.`
+];
+
+const RED_FOOTNOTE=[
+  descs=>`The file does contain minor notes — ${descs} — but in context, these register as charming quirks rather than structural concerns.`,
+  descs=>`For the record, the dossier flags ${descs}. These are catalogued but ultimately cosmetic blemishes on an otherwise impressive specimen.`,
+  descs=>`Noted imperfections include ${descs}. The review board acknowledges them and moves on — the fundamentals more than compensate.`
+];
+
+const RED_CONCERN=[
+  descs=>`The red flags — ${descs} — merit honest consideration. These are not dealbreakers in isolation, but they form a pattern worth monitoring.`,
+  descs=>`On the risk side, ${descs} introduces legitimate concern. The data warrants vigilance, not panic, but vigilance all the same.`,
+  descs=>`Counterbalancing the positives: ${descs}. These demand acknowledgment — they are real, measurable, and relevant to the final assessment.`
+];
+
+const GREEN_INSUFFICIENT=[
+  descs=>`In the subject's defense, the file does note ${descs}. However, in the current context, these read less like strengths and more like participation trophies.`,
+  descs=>`The green-flag section is not empty — ${descs} earns mention. But against the weight of the red-flag evidence, it is insufficient to shift the verdict.`
+];
+
+const GREEN_CONSOLATION=[
+  descs=>`The sole consolation: ${descs}. It is noted the way a coroner notes the deceased had excellent bone structure.`,
+  descs=>`For what it's worth, ${descs} appears in the record. Consider it a parting gift from the universe — ironic, insufficient, but technically present.`
+];
+
+const GREEN_BLANK='The green-flag section of this dossier is, quite literally, a blank page. Not a single positive indicator was recorded. This absence is, itself, the loudest data point in the file.';
+
+const CLOSERS={
+  wifey:[
+    score=>`Final assessment at ${score} points: the data is unequivocal. This individual exceeds benchmark expectations across multiple dimensions. The peer-reviewed recommendation, stated with full academic conviction: lock it down. Immediately.`,
+    score=>`Composite score: ${score}. The clinical recommendation is as clear as it gets — secure this commitment before someone with better data-reading skills does.`,
+    score=>`At ${score}, the verdict writes itself. This is not a drill. Initiate relationship-securing protocols at earliest opportunity.`
+  ],
+  solid:[
+    score=>`The composite score of ${score} indicates a high-quality match with tolerable deviations from the theoretical ideal. In portfolio terms: strong hold with bullish long-term outlook.`,
+    score=>`At ${score} points, the assessment is favorable. Minor imperfections noted, none material. The recommendation: proceed with confidence.`,
+    score=>`Score: ${score}. A strong showing by any standard. The minor footnotes in this file do not alter the conclusion — this is a sound investment.`
+  ],
+  caution:[
+    score=>`At ${score} points, the prospect shows real potential tempered by non-trivial risk factors. The recommendation: proceed with eyes open and expectations carefully calibrated.`,
+    score=>`A score of ${score} means the jury is out, but leaning favorable. Invest cautiously — the upside is real, but so are the risks.`,
+    score=>`Composite assessment: ${score}. Not a green light, not a red light — a yellow that demands you actually look both ways.`
+  ],
+  situationship:[
+    score=>`A score of ${score} places this squarely in uncertain territory — a holding pattern with no scheduled landing. Proceed with emotional guardrails firmly installed.`,
+    score=>`At ${score}, the data advises against emotional investment exceeding what you can afford to lose. This is a lease, not a purchase.`,
+    score=>`Score: ${score}. The clinical recommendation: maintain strategic distance. Feelings are a liability in this risk environment.`
+  ],
+  streets:[
+    score=>`With a composite score of ${score}, the risk rating would make any relationship underwriter nervous. She belongs, per the peer-reviewed literature, to the streets.`,
+    score=>`At ${score} points, the exit signs are illuminated and clearly marked. The recommendation: use them.`,
+    score=>`Score: ${score}. The data has spoken, and it is recommending you save your emotional capital for a more solvent prospect.`
+  ],
+  run:[
+    score=>`Final score: ${score}. The aggregate data recommends the Witness Protection protocol — new city, new phone number, scorched-earth digital cleanse. This is not pessimism. It is actuarial science.`,
+    score=>`At ${score} points, the only clinical recommendation is immediate and sustained retreat. Delete, block, relocate.`,
+    score=>`Score: ${score}. The system has auto-generated an exit strategy. You are advised to follow it without deviation.`
+  ],
+  witness_protection:[
+    score=>`Final clinical assessment at ${score}: this is not a dating prospect — it is an incident report in the making. The recommended intervention is immediate and complete geographic relocation.`,
+    score=>`Score: ${score}. The file has been forwarded to the appropriate authorities. Your recommended next step is a new identity and a head start.`
+  ]
+};
+
+// 3d. Composition pipeline
+function generateProfile(){
+  // ── COLLECT ──
   const items=[];
   DATA.forEach((cat,ci)=>{
     cat.traits.forEach((t,ti)=>{
@@ -603,216 +658,135 @@ function generateProfile(){
 
   const score=calcScore();
   const {reds,greens}=getCheckedTraits();
+  const redItems=items.filter(i=>i.pts<0);
+  const greenItems=items.filter(i=>i.pts>=0);
+  const redDescs=redItems.map(i=>i.desc);
+  const greenDescs=greenItems.map(i=>i.desc);
 
-  // ── Group by theme tag ──
-  const groups={};
-  items.forEach(it=>{
-    if(!groups[it.tag]) groups[it.tag]=[];
-    groups[it.tag].push(it);
+  // ── CLASSIFY ──
+  const tier=classifyTier(score);
+  const ps=primarySeed(score,reds.length,greens.length);
+  const ss=secondarySeed(items);
+
+  // Pick theme commentary for the dominant red-flag theme
+  const redGroups={};
+  redItems.forEach(i=>{
+    if(!redGroups[i.tag]) redGroups[i.tag]=[];
+    redGroups[i.tag].push(i);
   });
+  const topRedTag=Object.keys(redGroups).sort((a,b)=>{
+    const sa=redGroups[a].reduce((s,i)=>s+Math.abs(i.pts),0);
+    const sb=redGroups[b].reduce((s,i)=>s+Math.abs(i.pts),0);
+    return sb-sa;
+  })[0];
+  const themeComment=topRedTag&&THEME_LINES[topRedTag]?pick(THEME_LINES[topRedTag],ss):'';
+  const greenThemeComment=greenDescs.length>0?'In a dating pool where the bar is famously subterranean, these indicators carry real weight.':'';
 
-  // Separate red-flag themes from keeper
-  const redTags=Object.keys(groups).filter(t=>t!=='keeper')
-    .sort((a,b)=>{
-      const sa=groups[a].reduce((s,i)=>s+Math.abs(i.pts),0);
-      const sb=groups[b].reduce((s,i)=>s+Math.abs(i.pts),0);
-      return sb-sa; // highest impact first
-    });
-
-  const pick=(arr,seed)=>arr[Math.abs(seed)%arr.length];
+  // ── COMPOSE ──
   const paras=[];
-  const isHighScore=score>=80;
 
-  // ── Helper: build red-flag paragraphs ──
-  function buildRedParas(maxClusters,maxOrphans){
-    for(const tag of redTags.slice(0,maxClusters)){
-      const meta=M[tag];
-      if(!meta) continue;
-      const ds=groups[tag].map(i=>i.desc);
-      const seed=groups[tag].length+groups[tag].reduce((s,i)=>s+Math.abs(i.pts),0);
-      let p=pick(meta.i,seed)+' ';
-      if(ds.length===1) p+='The evidence: '+ds[0]+'.';
-      else if(ds.length===2) p+='The evidence — '+ds[0]+' combined with '+ds[1]+' — speaks for itself.';
-      else p+='Key indicators include '+ds.slice(0,-1).join(', ')+', and '+ds[ds.length-1]+'.';
-      p+=' '+pick(meta.c,seed);
-      paras.push(p);
+  if(tier==='wifey'||tier==='solid'){
+    // Green lead
+    if(greenDescs.length>0){
+      const woven=weaveTraits(greenDescs,ss);
+      paras.push(pick(GREEN_LEAD,ps)(woven,greenThemeComment));
     }
-    const orphans=[];
-    for(const tag of redTags.slice(maxClusters)){
-      groups[tag].forEach(i=>orphans.push(i.desc));
-    }
-    if(orphans.length>0&&paras.length<3){
-      const ods=orphans.slice(0,maxOrphans);
-      if(ods.length===1)
-        paras.push('Also noted: '+ods[0]+' — a minor but non-trivial footnote in the overall dossier.');
-      else
-        paras.push('Further field observations include '+ods.slice(0,-1).join(', ')+', and '+ods[ods.length-1]+'. Each contributes to a composite risk profile that grows more intricate with every data point.');
-    }
-  }
-
-  // ── Helper: build green-flag paragraph ──
-  function buildGreenPara(){
-    if(!groups['keeper']||groups['keeper'].length===0) return;
-    const meta=M['keeper'];
-    const ds=groups['keeper'].map(i=>i.desc);
-    const seed=ds.length;
-    let p;
-    if(isHighScore){
-      // Lead with strong positive framing for high scores
-      if(ds.length===1){
-        p='The standout indicator: '+ds[0]+'. A single trait, but a significant one that elevates the overall assessment.';
+    // Red as footnote (skip if no reds)
+    if(redDescs.length>0){
+      const woven=weaveTraits(redDescs,ss);
+      if(greenDescs.length>0){
+        paras.push(pick(RED_FOOTNOTE,ps)(woven));
       } else {
-        p='The green-flag portfolio here is substantial. ';
-        if(ds.length===2) p+='Key strengths: '+ds[0]+' and '+ds[1]+'.';
-        else p+='The portfolio includes '+ds.slice(0,-1).join(', ')+', and '+ds[ds.length-1]+'.';
-        p+=' In a dating pool where the bar is famously subterranean, she clears it with room to spare on these dimensions.';
+        // High score but only reds checked (rare edge case: base 100 minus small deduction)
+        paras.push('The dossier is light on specifics, but the baseline remains strong. Minor notes include '+woven+' — nothing that materially alters the outlook.');
       }
+    }
+    // Closer
+    const closerArr=CLOSERS[tier];
+    paras.push(pick(closerArr,ps)(score));
+
+  } else if(tier==='caution'){
+    // Balanced open
+    if(greenDescs.length>0&&redDescs.length>0){
+      paras.push(pick(BALANCED_OPEN,ps)(weaveTraits(greenDescs,ss),weaveTraits(redDescs,ss)));
+      // Red analysis — theme commentary, not re-listing traits
+      if(themeComment) paras.push('The concern is not any single item but the pattern they form. '+themeComment+' These warrant honest monitoring, not dismissal.');
+      else paras.push('The concern is not any single item but the cumulative pattern. Each flag alone is manageable; together, they form a risk profile that demands attention.');
+    } else if(greenDescs.length>0){
+      const woven=weaveTraits(greenDescs,ss);
+      paras.push(pick(GREEN_LEAD,ps)(woven,greenThemeComment));
     } else {
-      if(ds.length===1){
-        p='One green flag stands amid the wreckage: '+ds[0]+'. It is a single data point of hope in an otherwise turbulent dataset.';
-      } else {
-        p=pick(meta.i,seed)+' ';
-        if(ds.length===2) p+='Noted strengths: '+ds[0]+' and '+ds[1]+'.';
-        else p+='The portfolio includes '+ds.slice(0,-1).join(', ')+', and '+ds[ds.length-1]+'.';
-        p+=' '+pick(meta.c,seed);
-      }
+      const woven=weaveTraits(redDescs,ss);
+      paras.push(pick(RED_LEAD,ps)(woven,themeComment));
     }
-    paras.push(p);
-  }
+    paras.push(pick(CLOSERS.caution,ps)(score));
 
-  // ── Structure depends on score: lead with the dominant signal ──
-  if(isHighScore){
-    // HIGH SCORES: green flags first, red flags as footnotes
-    buildGreenPara();
-    if(redTags.length>0){
-      const allRedDescs=[];
-      redTags.forEach(tag=>{groups[tag].forEach(i=>allRedDescs.push(i.desc))});
-      if(allRedDescs.length===1)
-        paras.push('The file does contain one minor note — '+allRedDescs[0]+' — but in context, this registers as a charming quirk rather than a structural concern.');
-      else if(allRedDescs.length<=3)
-        paras.push('For the record, the dossier flags '+allRedDescs.join(' and ')+'. These are catalogued but ultimately cosmetic blemishes on an otherwise impressive specimen.');
-      else
-        paras.push('Minor infractions on file include '+allRedDescs.slice(0,3).join(', ')+', among others. None rise to the level of actionable concern given the overall assessment.');
+  } else if(tier==='situationship'){
+    // Red lead
+    if(redDescs.length>0){
+      const woven=weaveTraits(redDescs,ss);
+      paras.push(pick(RED_LEAD,ps)(woven,themeComment));
     }
+    // Green insufficient
+    if(greenDescs.length>0){
+      const woven=weaveTraits(greenDescs,ss);
+      paras.push(pick(GREEN_INSUFFICIENT,ps)(woven));
+    } else {
+      paras.push(GREEN_BLANK);
+    }
+    paras.push(pick(CLOSERS.situationship,ps)(score));
+
+  } else if(tier==='streets'){
+    // Red lead
+    if(redDescs.length>0){
+      const woven=weaveTraits(redDescs,ss);
+      paras.push(pick(RED_LEAD,ps)(woven,themeComment));
+    }
+    // Green consolation
+    if(greenDescs.length>0){
+      const woven=weaveTraits(greenDescs,ss);
+      paras.push(pick(GREEN_CONSOLATION,ps)(woven));
+    } else {
+      paras.push(GREEN_BLANK);
+    }
+    paras.push(pick(CLOSERS.streets,ps)(score));
+
+  } else if(tier==='run'){
+    // Red roast
+    if(redDescs.length>0){
+      const woven=weaveTraits(redDescs,ss);
+      paras.push(pick(RED_ROAST,ps)(woven,themeComment));
+    } else {
+      paras.push('The file is thin on specifics but thick with foreboding. What data exists points unambiguously toward the exit.');
+    }
+    // Green consolation if any
+    if(greenDescs.length>0){
+      const woven=weaveTraits(greenDescs,ss);
+      paras.push(pick(GREEN_CONSOLATION,ps)(woven));
+    }
+    paras.push(pick(CLOSERS.run,ps)(score));
+
   } else {
-    // LOW/MID SCORES: red flags first, green flags as secondary
-    buildRedParas(2,4);
-    buildGreenPara();
+    // witness_protection (score < 0)
+    if(redDescs.length>0){
+      const woven=weaveTraits(redDescs,ss);
+      paras.push(pick(RED_CATASTROPHE,ps)(woven,themeComment));
+    } else {
+      paras.push('The subject has achieved a negative score through sheer force of problematic will. The details are classified for your own protection.');
+    }
+    if(greenDescs.length>0){
+      const woven=weaveTraits(greenDescs,ss);
+      paras.push(pick(GREEN_CONSOLATION,ps)(woven));
+    }
+    paras.push(pick(CLOSERS.witness_protection,ps)(score));
   }
 
-  // ── Score-based synthesis closer ──
-  if(score<=0)
-    paras.push('Final clinical assessment: this is not a dating prospect — it is an incident report in the making. The recommended intervention is immediate and complete geographic relocation.');
-  else if(score<20)
-    paras.push('The aggregate data recommends the Witness Protection protocol: new city, new phone number, scorched-earth digital cleanse. This is not pessimism — it is actuarial science.');
-  else if(score<40)
-    paras.push(`With a composite score of ${score}, the risk rating would make any relationship underwriter nervous. She belongs, per the peer-reviewed literature, to the streets.`);
-  else if(score<60)
-    paras.push(`A score of ${score} places this squarely in uncertain territory — a holding pattern with no scheduled landing. Proceed with emotional guardrails firmly installed.`);
-  else if(score<80)
-    paras.push(`At ${score} points, the prospect shows real potential tempered by non-trivial risk factors. The recommendation: proceed with eyes open and expectations carefully calibrated.`);
-  else if(score>=95&&greens.length>=5)
-    paras.push('Final assessment: the data is unequivocal. This individual exceeds benchmark expectations across multiple dimensions. The peer-reviewed recommendation, stated with full academic conviction: lock it down. Immediately.');
-  else if(score>=80)
-    paras.push('The composite score indicates a high-quality match with tolerable deviations from the theoretical ideal. In portfolio terms: strong hold with bullish long-term outlook.');
-
+  // ── SEAL — enforce max 4 paragraphs ──
   return paras.slice(0,4).join('<br><br>');
 }
 
-// ── AI Profile via Groq API ──
-async function generateAIProfile(){
-  const score=calcScore();
-  const {reds,greens}=getCheckedTraits();
-  const allTraits=[...reds,...greens];
-  if(allTraits.length===0) return null;
-
-  const traitLines=allTraits.map(t=>{
-    const meta=T[t.name];
-    const desc=meta?` — ${meta.d}`:'';
-    return `- ${t.name} (${t.cat}, ${t.pts>0?'+':''}${t.pts}pts)${desc}`;
-  }).join('\n');
-
-  const tier=getTier(score);
-  const toneGuide=score>=95?'Write as if filing an urgent recommendation to not let this one get away. Every red flag is a charming quirk. Final line: emphatic lock-it-down.'
-    :score>=80?'Write a glowing review with 1-2 wry footnotes about minor red flags. Final line: strong endorsement.'
-    :score>=60?'Balanced analysis. Green flags get credit, red flags get dry commentary. Final line: cautious optimism.'
-    :score>=40?'Skeptical analyst. Red flags dominate the narrative. Green flags are noted but insufficient. Final line: advise caution.'
-    :'Full roast. Green flags are ironic consolation prizes. Final line: exit strategy.';
-
-  const bannedNote=score>=80?' BANNED phrases — do NOT use any of these: "paradox", "situationship", "proceed at your own risk", "mixed signals", "proceed with caution", "double-edged sword". The score is high — there is no ambiguity.':'';
-
-  const scoreFraming=score>100
-    ?`Score: ${score} out of 100 base (scores above 100 mean green flags outweigh all red flags — this is an exceptional result)`
-    :`Score: ${score} out of 100`;
-
-  const systemPrompt=`You are a dry, clinical dating analyst writing personality profiles with bone-dry wit. Write in third person referring to "the subject." No emojis. No markdown. No bullet points. Flowing prose only.
-
-STRUCTURE (follow exactly):
-- Paragraph 1: Lead with the DOMINANT signal. If green flags outweigh red flags, open with what makes the subject impressive. If red flags dominate, open with the primary concerns.
-- Paragraph 2: Address the MINORITY flags as secondary notes. For high scorers, red flags are minor footnotes. For low scorers, green flags are small consolation.
-- Final sentence: ONE clear clinical recommendation. Pick a single direction — do not hedge with "but" or contradict yourself. The recommendation must match the score.
-
-CRITICAL RULES:
-- The entire profile must express ONE coherent opinion. Do not praise in one sentence and warn in the next.
-- Every sentence must reinforce the same overall verdict — not alternate between positive and negative.${bannedNote}`;
-
-  const exampleBlock=score>=80?`
-
-EXAMPLE of correct high-score style (do NOT copy verbatim — use as tone reference only):
-"The subject presents a remarkably clean dossier. Her ability to hold a conversation without checking her phone suggests either genuine interest or an expired data plan — either way, the result is the same. The minor infractions on file — an enthusiasm for astrology, a suspicious number of throw pillows — are catalogued but ultimately irrelevant to the final assessment. Clinical recommendation: this is not a drill. Secure commitment at earliest opportunity."
-`:'';
-
-  const userPrompt=`Write a personality profile for this date.
-
-${scoreFraming}
-Tier: "${tier.label}" — "${tier.msg}"
-
-Red flags (${reds.length}):
-${reds.length?reds.map(t=>{const m=T[t.name];return `- ${t.name} (${t.pts}pts)${m?' — '+m.d:''}`}).join('\n'):'None'}
-
-Green flags (${greens.length}):
-${greens.length?greens.map(t=>{const m=T[t.name];return `- ${t.name} (+${t.pts}pts)${m?' — '+m.d:''}`}).join('\n'):'None'}
-
-Tone guidance: ${toneGuide}${exampleBlock}
-
-Write 2-4 paragraphs, under 250 words. Be specific about the traits listed — reference them directly with dry analytical humor. End with ONE clear clinical recommendation that matches the score. Do not contradict yourself.`;
-
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),15000);
-
-  try{
-    const res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization':'Bearer '+GROQ_API_KEY
-      },
-      body:JSON.stringify({
-        model:'llama-3.3-70b-versatile',
-        messages:[
-          {role:'system',content:systemPrompt},
-          {role:'user',content:userPrompt}
-        ],
-        temperature:0.55,
-        max_tokens:500
-      }),
-      signal:controller.signal
-    });
-    clearTimeout(timeout);
-    if(!res.ok) throw new Error('API '+res.status);
-    const data=await res.json();
-    const text=data.choices?.[0]?.message?.content;
-    if(!text) throw new Error('Empty response');
-    return text.trim().replace(/\n\n/g,'<br><br>').replace(/\n/g,'<br><br>');
-  }catch(e){
-    clearTimeout(timeout);
-    console.warn('AI profile failed:',e.message);
-    return null;
-  }
-}
-
 function getProfileText(){
-  const raw=cachedAIProfile||generateProfile();
+  const raw=generateProfile();
   return raw?raw.replace(/<br><br>/g,'\n\n'):'';
 }
 
@@ -828,7 +802,6 @@ function render(){
       <p class="tagline">Everyone starts at 100. Few survive.</p>
       <p class="instruction">Check off traits across 8 categories. Get your verdict.</p>
       <button class="start-btn" onclick="goTo(1)">START</button>
-      ${GROQ_API_KEY?'':`<button class="api-key-btn" onclick="promptApiKey()" style="margin-top:12px;background:none;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);padding:6px 16px;border-radius:8px;cursor:pointer;font-size:0.75rem">Set Groq API Key for AI Profiles</button>`}
     </div>
   </div>`;
 
@@ -921,18 +894,9 @@ function render(){
           ${breakdownHTML}
         </div>`:''}
 
-        ${(fallbackProfile||cachedAIProfile)?`<div class="section-card">
+        ${fallbackProfile?`<div class="section-card">
           <h3>Personality Profile</h3>
-          ${cachedAIProfile
-            ?`<div class="profile-text profile-fade-in" id="profile-text">${cachedAIProfile}</div>`
-            :GROQ_API_KEY
-              ?`<div class="profile-loading" id="profile-loading">
-                  <div class="loading-spinner"></div>
-                  <span>Generating AI profile…</span>
-                </div>
-                <div class="profile-text" id="profile-text" style="display:none">${fallbackProfile}</div>`
-              :`<div class="profile-text" id="profile-text">${fallbackProfile}</div>`
-          }
+          <div class="profile-text" id="profile-text">${fallbackProfile}</div>
         </div>`:''}
 
         <div class="section-card">
@@ -996,24 +960,6 @@ function render(){
     el.addEventListener('touchstart',()=>el.classList.toggle('show-tip'),{passive:true});
   });
 
-  // AI profile async trigger
-  const resultsActive=currentStep===TOTAL_STEPS+1;
-  if(resultsActive&&!cachedAIProfile&&!aiProfilePending&&GROQ_API_KEY){
-    aiProfilePending=true;
-    generateAIProfile().then(result=>{
-      aiProfilePending=false;
-      const loader=document.getElementById('profile-loading');
-      const el=document.getElementById('profile-text');
-      if(result){
-        cachedAIProfile=result;
-        if(loader) loader.remove();
-        if(el){el.innerHTML=result;el.style.display='';el.classList.add('profile-fade-in');}
-      }else{
-        if(loader) loader.remove();
-        if(el) el.style.display='';
-      }
-    });
-  }
 }
 
 function toggleTrait(el,key){
@@ -1034,7 +980,6 @@ function toggleTrait(el,key){
 }
 
 function goTo(step){
-  cachedAIProfile=null;
   currentStep=step;
   render();
   window.scrollTo({top:0,behavior:'instant'});
@@ -1042,19 +987,8 @@ function goTo(step){
 
 function resetAll(){
   Object.keys(checked).forEach(k=>delete checked[k]);
-  cachedAIProfile=null;
-  aiProfilePending=false;
   currentStep=0;
   render();
-}
-
-function promptApiKey(){
-  const current=localStorage.getItem('groq_api_key')||'';
-  const key=prompt('Enter your Groq API key for AI-generated profiles.\nGet one free at console.groq.com/keys\n\nLeave blank to disable AI profiles.',current);
-  if(key===null) return; // cancelled
-  if(key){localStorage.setItem('groq_api_key',key);}
-  else{localStorage.removeItem('groq_api_key');}
-  location.reload();
 }
 
 const SITE_URL='https://bro-xuan.github.io/date-scoring/';
