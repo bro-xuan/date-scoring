@@ -828,6 +828,7 @@ function render(){
       <p class="tagline">Everyone starts at 100. Few survive.</p>
       <p class="instruction">Check off traits across 8 categories. Get your verdict.</p>
       <button class="start-btn" onclick="goTo(1)">START</button>
+      <button class="api-key-btn" onclick="promptApiKey()" style="margin-top:12px;background:none;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);padding:6px 16px;border-radius:8px;cursor:pointer;font-size:0.75rem">${GROQ_API_KEY?'AI Profile: ON':'Set Groq API Key for AI Profiles'}</button>
     </div>
   </div>`;
 
@@ -1045,6 +1046,15 @@ function resetAll(){
   aiProfilePending=false;
   currentStep=0;
   render();
+}
+
+function promptApiKey(){
+  const current=localStorage.getItem('groq_api_key')||'';
+  const key=prompt('Enter your Groq API key for AI-generated profiles.\nGet one free at console.groq.com/keys\n\nLeave blank to disable AI profiles.',current);
+  if(key===null) return; // cancelled
+  if(key){localStorage.setItem('groq_api_key',key);}
+  else{localStorage.removeItem('groq_api_key');}
+  location.reload();
 }
 
 const SITE_URL='https://bro-xuan.github.io/date-scoring/';
