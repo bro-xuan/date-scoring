@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Date Scoring</title>
+<meta property="og:title" content="Date Scoring">
+<meta property="og:description" content="Everyone starts at 100. Few survive. Rate your date across 8 categories and get your verdict.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://bro-xuan.github.io/date-scoring/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Date Scoring">
+<meta name="twitter:description" content="Everyone starts at 100. Few survive. Rate your date across 8 categories and get your verdict.">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -74,13 +81,15 @@ body{
 .progress-dots{display:flex;gap:6px;align-items:center}
 .dot{
   width:10px;height:10px;border-radius:50%;background:var(--border);
-  transition:background .3s,transform .3s;
+  transition:background .3s,transform .3s;cursor:pointer;
 }
 .dot.completed{background:var(--red)}
 .dot.current{background:var(--red);transform:scale(1.3);animation:pulse 1.5s infinite}
 .dot.green-dot.completed{background:var(--green)}
 .dot.green-dot.current{background:var(--green);transform:scale(1.3)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes scorePulse{0%{transform:scale(1)}50%{transform:scale(1.3)}100%{transform:scale(1)}}
+.score-flash{animation:scorePulse .3s ease}
 
 /* ── Step content ── */
 .step-content{
@@ -192,8 +201,21 @@ body{
 
 /* Profile */
 .profile-text{
-  font-size:1rem;line-height:1.7;color:var(--text);
+  font-size:0.95rem;line-height:1.8;color:var(--text);
+  font-style:italic;letter-spacing:0.01em;
 }
+.profile-loading{
+  display:flex;align-items:center;justify-content:center;gap:12px;
+  padding:20px 0;color:var(--muted);font-style:italic;font-size:0.9rem;
+}
+.loading-spinner{
+  width:32px;height:32px;border:3px solid var(--border);
+  border-top-color:var(--gold);border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.profile-fade-in{animation:profileFadeIn .5s ease-in}
+@keyframes profileFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
 /* Trait summary columns */
 .trait-summary-cols{
@@ -244,6 +266,8 @@ body{
 }
 .btn:hover{opacity:0.85}
 .btn:active{transform:scale(0.97)}
+.btn-back{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-back:hover{color:var(--text);border-color:var(--text)}
 .btn-reset{background:var(--red);color:#fff}
 
 /* Footer */
@@ -315,19 +339,19 @@ const DATA = [
     {name:"Posts Every Meal",pts:-5,tip:"Your food gets cold while she finds the right angle."},
   ]},
   { title:"Dating Behavior", desc:"Red flags on the date itself", type:"deduction", traits:[
-    {name:"From Dubai",pts:-25,tip:"If you know, you know..."},
+    {name:"From Dubai",pts:-15,tip:"If you know, you know..."},
     {name:"Single Mom",pts:-15,tip:"You're not #1 priority, champ."},
     {name:"Coworker",pts:-15,tip:"HR has entered the chat."},
     {name:"Looks Nothing Like Her Photos",pts:-15,tip:"41% lose attraction. Catfish energy."},
     {name:"Mentions Her Ex Repeatedly",pts:-15,tip:"63% say this ends the date on the spot."},
-    {name:"Feminist",pts:-10,tip:"Every dinner bill is a political debate."},
+    {name:"Feminist",pts:-5,tip:"Every dinner bill is a political debate."},
     {name:"Nurse",pts:-5,tip:"12-hour shifts mean she's never home... or always tired."},
     {name:"Teacher",pts:-5,tip:"Will grade your performance. Literally."},
     {name:"Lawyer",pts:-10,tip:"She will win every argument. Every. Single. One."},
   ]},
   { title:"The Ick Factor", desc:"Quirky dealbreakers", type:"deduction", traits:[
     {name:"Chews With Mouth Open",pts:-10,tip:"The soundtrack nobody asked for."},
-    {name:"Has Tattoos",pts:-5,tip:"Every tattoo has a story you'll hear 47 times."},
+    {name:"Has Tattoos",pts:-3,tip:"Every tattoo has a story you'll hear 47 times."},
     {name:"Baby Talk",pts:-5,tip:"'Does my widdle baby want some din-din?' You're 28."},
     {name:"Car Full of Trash",pts:-10,tip:"Her passenger seat is an archaeological dig site."},
     {name:"Claps When the Plane Lands",pts:-5,tip:"'We are not the same species.'"},
@@ -364,6 +388,9 @@ const TIERS = [
 const checked = {}; // "catIdx_traitIdx" -> bool
 let currentStep = 0; // 0 = start, 1-8 = categories, 9 = results
 const TOTAL_STEPS = DATA.length; // 8
+const GROQ_API_KEY = localStorage.getItem('groq_api_key')||'';
+let cachedAIProfile = null;
+let aiProfilePending = false;
 
 function getTier(score){
   return TIERS.find(t=>score>=t.min);
@@ -400,85 +427,393 @@ function getCheckedTraits(){
   return {reds,greens};
 }
 
+// ── Trait-theme mapping (shared by generateProfile + generateAIProfile) ──
+const T={
+    // Communication
+    "One-Word Texter":{g:"unavailable",d:"monosyllabic digital correspondence"},
+    "Takes 24h+ to Reply":{g:"unavailable",d:"calculated 24-hour response delays"},
+    "Only Talks About Herself":{g:"self-absorbed",d:"a conversational monopoly where you serve as live studio audience"},
+    "Always on Phone During Dates":{g:"disengaged",d:"chronic device dependency mid-date (you are ambient company)"},
+    "Argues About Word Choices":{g:"difficult",d:"micro-linguistic policing ('fine' vs 'good' — 3-hour tribunal)"},
+    "Voice Notes Instead of Texts":{g:"chaotic",d:"replacing texts with unsolicited 4-minute audio memoirs"},
+    // Personality
+    '"All My Exes Are Crazy"':{g:"delusional",d:"a conspicuous failure to identify herself as the common denominator"},
+    "Drama Magnet":{g:"chaotic",d:"a statistically improbable frequency of interpersonal conflict"},
+    "Love-Bombs First Date":{g:"chaotic",d:"declaring soulmate status within the first 45 minutes"},
+    "Zero Hobbies":{g:"low-effort",d:"a recreational vacuum filled entirely by Netflix and online shopping"},
+    "Chronically Late":{g:"difficult",d:"chronic temporal delinquency ('5 min away' — hasn't left the house)"},
+    '"Brutally Honest"':{g:"difficult",d:"weaponized candor where the brutality is the feature, not the honesty"},
+    "Can't Cook and Proud":{g:"low-effort",d:"culinary abstinence worn as a badge of honor"},
+    "Never Apologizes":{g:"difficult",d:"a conflict-resolution framework that omits the apology module entirely"},
+    // Lifestyle
+    "Has an OnlyFans":{g:"wild-card",d:"monetized public content creation (everyone's seen more of her than you)"},
+    "MLM Boss Babe":{g:"delusional",d:"participation in a reverse-revenue business model she calls entrepreneurship"},
+    "Party Girl":{g:"chaotic",d:"a nightlife frequency that qualifies as a second career"},
+    "Still Talks to Her Ex":{g:"trust-issue",d:"active communication with a theoretically former partner"},
+    "Instagram Influencer":{g:"image-obsessed",d:"a content-creation lifestyle cosplaying as a personality"},
+    '"I\'m Not Like Other Girls"':{g:"delusional",d:"aggressively proclaimed uniqueness that is, ironically, extremely common"},
+    "More Than 3 Cats":{g:"eccentric",d:"a feline-to-human ratio exceeding clinical norms"},
+    "Vegan and Won't Shut Up":{g:"difficult",d:"unsolicited dietary evangelism before, during, and after every meal"},
+    "Hard Drug User":{g:"wild-card",d:"substance use classified as an instant dealbreaker by 81% of the dating population"},
+    // Financial
+    "Expensive Taste, No Job":{g:"financial-risk",d:"champagne expectations on an unemployment timeline"},
+    "Never Offers to Split":{g:"financial-risk",d:"a wallet that serves a purely decorative function"},
+    "Shopping Addiction":{g:"financial-risk",d:"an Amazon delivery frequency that rivals the postal service"},
+    "Venmos You After the Date":{g:"financial-risk",d:"post-date invoice generation (61% of singles say disqualifying)"},
+    "Crypto Bro Female Edition":{g:"delusional",d:"unsolicited cryptocurrency proselytizing"},
+    // Social Media
+    "Posts Cryptic Relationship Quotes":{g:"image-obsessed",d:"subliminal broadcast messaging as emotional processing"},
+    "Heavily Filtered/AI Photos":{g:"image-obsessed",d:"photographic self-representation with creative liberties"},
+    "Stalks Your Old Posts":{g:"trust-issue",d:"forensic social media archaeology dating back years (she liked your 2019 beach pic at 2 AM)"},
+    "Uses Astrology as Personality":{g:"delusional",d:"outsourcing personal accountability to planetary alignment"},
+    "Keeps Phone Face-Down":{g:"trust-issue",d:"the classic face-down phone maneuver (what's she hiding? everything)"},
+    "Posts Every Meal":{g:"image-obsessed",d:"compulsive food photography before anyone is permitted to eat"},
+    // Dating Behavior
+    "From Dubai":{g:"wild-card",d:"Dubai provenance — the implications are left as an exercise for the reader"},
+    "Single Mom":{g:"situational",d:"pre-existing priority hierarchies (you are not #1, champ)"},
+    "Coworker":{g:"situational",d:"a workplace-proximity entanglement (HR has entered the chat)"},
+    "Looks Nothing Like Her Photos":{g:"image-obsessed",d:"a material divergence between digital and physical presentation"},
+    "Mentions Her Ex Repeatedly":{g:"trust-issue",d:"ex-partner references at academic-citation frequency"},
+    "Feminist":{g:"difficult",d:"every dinner bill is now a referendum on gender politics"},
+    "Nurse":{g:"situational",d:"a schedule optimized for professional heroism, not personal availability"},
+    "Teacher":{g:"situational",d:"professional evaluation habits that bleed into personal life"},
+    "Lawyer":{g:"difficult",d:"professional-grade argumentation training (every disagreement is a deposition)"},
+    // The Ick Factor
+    "Chews With Mouth Open":{g:"ick",d:"audible open-mouth mastication — the soundtrack nobody asked for"},
+    "Has Tattoos":{g:"ick",d:"a body-art portfolio with mandatory 47-time narration"},
+    "Baby Talk":{g:"ick",d:"infantilized speech patterns from a full-grown adult"},
+    "Car Full of Trash":{g:"ick",d:"a passenger seat that doubles as an archaeological dig site"},
+    "Claps When the Plane Lands":{g:"ick",d:"applause for routine commercial aviation achievements"},
+    // Green Flags
+    "Can Actually Cook":{g:"keeper",d:"genuine culinary competence"},
+    "Laughs at Your Jokes":{g:"keeper",d:"humor receptivity (even for your worst material)"},
+    "Watches Sports With You":{g:"keeper",d:"shared recreational enthusiasm (Sunday football upgraded)"},
+    "Low Maintenance":{g:"keeper",d:"minimal operational overhead — ready in 15, no drama"},
+    "Gets Along With Your Boys":{g:"keeper",d:"peer-group social integration (the boys approve)"},
+    "Has Her Own Money":{g:"keeper",d:"verified financial self-sufficiency"},
+    "Good Relationship With Her Dad":{g:"keeper",d:"healthy paternal attachment patterns (no daddy issues detected)"},
+    "Kind to Waitstaff":{g:"keeper",d:"unprompted kindness to service workers"},
+    "Remembers Small Details":{g:"keeper",d:"high-resolution interpersonal memory (your coffee order from 3 weeks ago)"},
+    "Gym Girl":{g:"keeper",d:"consistent physical self-investment"},
+    "No Social Media Drama":{g:"keeper",d:"admirable digital restraint — no vague-posting, no subliminals"},
+    "Texts Back Fast":{g:"keeper",d:"prompt communication reciprocity"},
+    "Comfortable With Silence":{g:"keeper",d:"secure-attachment silence tolerance"},
+    "Genuinely Curious About You":{g:"keeper",d:"authentic interpersonal curiosity (asks AND listens)"},
+};
+
 // ── Profile generator ──
 function generateProfile(){
-  const catCounts={};
+  // Theme metadata: intro templates + closers (multiple options per theme, picked by trait-count seed)
+  const M={
+    "unavailable":{
+      i:["The subject's emotional availability registers somewhere between 'out of office' and 'permanently relocated.'",
+         "From a responsiveness standpoint, you rank somewhere between her spam folder and a push notification she hasn't enabled."],
+      c:["You are not being ghosted — you are being systematically deprioritized with plausible deniability.",
+         "The prognosis for consistent emotional reciprocity is, clinically speaking, grim."]
+    },
+    "disengaged":{
+      i:["The subject's attention during in-person encounters is best described as 'physically present, digitally elsewhere.'",
+         "Her engagement level during dates hovers somewhere between 'waiting room' and 'on hold with customer service.'"],
+      c:["You are not a companion — you are ambient background noise while she scrolls.",
+         "Competing with a 6-inch screen for eye contact is a battle no amount of charm can win."]
+    },
+    "self-absorbed":{
+      i:["The conversational dynamic reveals a pronounced asymmetry in topic distribution."],
+      c:["You are not a participant in dialogue — you are a captive audience with a dinner reservation."]
+    },
+    "difficult":{
+      i:["The interpersonal friction coefficient here warrants a dedicated risk assessment.",
+         "The operational overhead of this relationship registers in the upper percentile of the maintenance spectrum."],
+      c:["Patience, in this context, is not a virtue — it is a full-time job requirement.",
+         "The energy expenditure required to maintain equilibrium may exceed any conceivable return on investment."]
+    },
+    "chaotic":{
+      i:["The chaos index on this individual is, by any standard metric, elevated.",
+         "Her life operates less on routine and more on a crisis-to-crisis momentum that would exhaust a first responder."],
+      c:["Predictability is not on the menu. Neither, to be fair, is boredom.",
+         "Strap in — this is less a relationship and more a weather event."]
+    },
+    "delusional":{
+      i:["The subject's relationship with objective reality is best described as 'loosely affiliated.'",
+         "A recurring pattern of reality-adjacent thinking emerges across multiple data points."],
+      c:["The gap between self-perception and observable behavior could comfortably house a mid-size sedan.",
+         "Corrective perspective is strongly recommended, though unlikely to be accepted."]
+    },
+    "image-obsessed":{
+      i:["Image management appears to be the primary occupation, with actual life serving as raw content.",
+         "Considerable resources are devoted to curating a public-facing identity that may diverge significantly from the source material."],
+      c:["The curated self has largely consumed the actual self — you are, in practice, dating a brand.",
+         "What you see is, by careful design, not what you get."]
+    },
+    "trust-issue":{
+      i:["Several behavioral indicators suggest the trust infrastructure in this dynamic is structurally compromised.",
+         "The trust profile here exhibits load-bearing cracks that merit serious inspection."],
+      c:["Transparency, in this relationship, is a theoretical concept — not an operational policy.",
+         "The foundation you'd be building on has pre-existing fractures. Proceed with engineering-grade caution."]
+    },
+    "financial-risk":{
+      i:["The financial trajectory of this relationship resembles a leveraged position with unlimited downside exposure.",
+         "An analysis of spending patterns versus income generation reveals a deficit model you are expected to personally subsidize."],
+      c:["Your wallet is not an accessory in this arrangement — it is load-bearing infrastructure.",
+         "The ROI calculation on this relationship requires a spreadsheet, a stiff drink, and a strong stomach."]
+    },
+    "low-effort":{
+      i:["The effort-to-output ratio across key life domains suggests a deep philosophical commitment to the status quo."],
+      c:["Growth is not on the roadmap. Comfortable stagnation is both the destination and the journey."]
+    },
+    "wild-card":{
+      i:["Certain data points here defy conventional categorization, occupying what risk analysts call 'the tail of the distribution.'"],
+      c:["These are not red flags so much as signal flares visible from low orbit."]
+    },
+    "ick":{
+      i:["The visceral-response indicators — colloquially, 'the ick' — have registered at clinically notable levels.",
+         "Certain observed behaviors trigger involuntary aversion responses that no amount of rational override can suppress."],
+      c:["These are not mere preferences — they are neurological events. The ick does not negotiate.",
+         "Once observed, these cannot be un-observed. They will resurface unprompted at 3 AM. Guaranteed."]
+    },
+    "situational":{
+      i:["Beyond personality, several situational variables introduce logistical complexity to the relationship calculus."],
+      c:["These are not character flaws per se — they are circumstantial factors that nonetheless affect the cost-benefit analysis."]
+    },
+    "eccentric":{
+      i:["The subject demonstrates lifestyle choices that fall comfortably outside standard deviation."],
+      c:["Eccentricity is not inherently disqualifying, but it does require a flexible definition of 'normal.'"]
+    },
+    "keeper":{
+      i:["On the credit side of the ledger, empirically validated positive indicators present themselves.",
+         "The green-flag cluster here deserves recognition — these are not trivial virtues in the current dating market."],
+      c:["These traits represent genuine long-term relationship capital. Weight them accordingly in your final calculus.",
+         "In a dating pool where the bar is famously subterranean, she clears it with room to spare on these dimensions."]
+    }
+  };
+
+  // ── Collect checked traits with their theme tags ──
+  const items=[];
   DATA.forEach((cat,ci)=>{
-    let count=0;
-    cat.traits.forEach((_,ti)=>{if(checked[ci+'_'+ti])count++});
-    catCounts[cat.title]=count;
+    cat.traits.forEach((t,ti)=>{
+      if(checked[ci+'_'+ti]){
+        const a=T[t.name];
+        if(a) items.push({tag:a.g, desc:a.d, name:t.name, pts:t.pts});
+      }
+    });
   });
 
-  const lines=[];
+  if(items.length===0)
+    return "No data points were recorded. The subject either presented zero observable characteristics — which is itself a characteristic — or the evaluator fell asleep mid-assessment. Inconclusive. Retry with caffeine.";
+
   const score=calcScore();
   const {reds,greens}=getCheckedTraits();
 
-  // Category-specific quips
-  if(catCounts["Communication"]>=3)
-    lines.push("She treats texting like a hostage negotiation. Good luck getting a straight answer.");
-  else if(catCounts["Communication"]>=2)
-    lines.push("Communication with her requires a decoder ring and the patience of a saint.");
+  // ── Group by theme tag ──
+  const groups={};
+  items.forEach(it=>{
+    if(!groups[it.tag]) groups[it.tag]=[];
+    groups[it.tag].push(it);
+  });
 
-  if(catCounts["Personality"]>=4)
-    lines.push("Her personality is a red flag factory running at full capacity.");
-  else if(catCounts["Personality"]>=2)
-    lines.push("She's got 'character.' That's one way to put it.");
+  // Separate red-flag themes from keeper
+  const redTags=Object.keys(groups).filter(t=>t!=='keeper')
+    .sort((a,b)=>{
+      const sa=groups[a].reduce((s,i)=>s+Math.abs(i.pts),0);
+      const sb=groups[b].reduce((s,i)=>s+Math.abs(i.pts),0);
+      return sb-sa; // highest impact first
+    });
 
-  if(catCounts["Lifestyle"]>=4)
-    lines.push("She's basically a reality TV character who hasn't been cast yet.");
-  else if(catCounts["Lifestyle"]>=2)
-    lines.push("Her lifestyle choices are... certainly choices.");
+  const pick=(arr,seed)=>arr[Math.abs(seed)%arr.length];
+  const paras=[];
+  const isHighScore=score>=80;
 
-  if(catCounts["Financial"]>=3)
-    lines.push("Her idea of 'going Dutch' is you paying for everything in the Netherlands.");
-  else if(catCounts["Financial"]>=2)
-    lines.push("Your wallet called. It's filing for a restraining order.");
-
-  if(catCounts["Social Media"]>=3)
-    lines.push("She doesn't live life, she curates it for an audience of strangers.");
-  else if(catCounts["Social Media"]>=2)
-    lines.push("Her phone screen time is a full-time job.");
-
-  if(catCounts["Dating Behavior"]>=4)
-    lines.push("The date itself is a minefield. Bring a map. And armor.");
-  else if(catCounts["Dating Behavior"]>=2)
-    lines.push("She comes with a few asterisks and a terms-of-service agreement.");
-
-  if(catCounts["The Ick Factor"]>=3)
-    lines.push("The ick is strong with this one. You felt a disturbance in the Force.");
-  else if(catCounts["The Ick Factor"]>=2)
-    lines.push("A couple of icks that'll haunt you at 3 AM.");
-
-  if(catCounts["Green Flags"]>=8)
-    lines.push("She's basically a unicorn. Protect her at all costs.");
-  else if(catCounts["Green Flags"]>=5)
-    lines.push("Plenty of green flags flying. She's got serious keeper energy.");
-  else if(catCounts["Green Flags"]>=2)
-    lines.push("A few green flags peeking through. There's hope.");
-
-  // Fallback / summary lines
-  if(lines.length===0){
-    if(reds.length===0&&greens.length===0)
-      lines.push("You didn't check anything. Either she's perfect or you fell asleep on the date.");
-    else if(reds.length===0)
-      lines.push("Zero red flags? She's either perfect or you're in denial. Probably denial.");
-    else if(greens.length===0)
-      lines.push("Not a single green flag? Brother, why are you still on this date?");
+  // ── Helper: build red-flag paragraphs ──
+  function buildRedParas(maxClusters,maxOrphans){
+    for(const tag of redTags.slice(0,maxClusters)){
+      const meta=M[tag];
+      if(!meta) continue;
+      const ds=groups[tag].map(i=>i.desc);
+      const seed=groups[tag].length+groups[tag].reduce((s,i)=>s+Math.abs(i.pts),0);
+      let p=pick(meta.i,seed)+' ';
+      if(ds.length===1) p+='The evidence: '+ds[0]+'.';
+      else if(ds.length===2) p+='The evidence — '+ds[0]+' combined with '+ds[1]+' — speaks for itself.';
+      else p+='Key indicators include '+ds.slice(0,-1).join(', ')+', and '+ds[ds.length-1]+'.';
+      p+=' '+pick(meta.c,seed);
+      paras.push(p);
+    }
+    const orphans=[];
+    for(const tag of redTags.slice(maxClusters)){
+      groups[tag].forEach(i=>orphans.push(i.desc));
+    }
+    if(orphans.length>0&&paras.length<3){
+      const ods=orphans.slice(0,maxOrphans);
+      if(ods.length===1)
+        paras.push('Also noted: '+ods[0]+' — a minor but non-trivial footnote in the overall dossier.');
+      else
+        paras.push('Further field observations include '+ods.slice(0,-1).join(', ')+', and '+ods[ods.length-1]+'. Each contributes to a composite risk profile that grows more intricate with every data point.');
+    }
   }
 
-  if(reds.length>0&&greens.length>0&&lines.length<3){
-    lines.push("She's a paradox wrapped in a situationship. Proceed at your own risk.");
+  // ── Helper: build green-flag paragraph ──
+  function buildGreenPara(){
+    if(!groups['keeper']||groups['keeper'].length===0) return;
+    const meta=M['keeper'];
+    const ds=groups['keeper'].map(i=>i.desc);
+    const seed=ds.length;
+    let p;
+    if(isHighScore){
+      // Lead with strong positive framing for high scores
+      if(ds.length===1){
+        p='The standout indicator: '+ds[0]+'. A single trait, but a significant one that elevates the overall assessment.';
+      } else {
+        p='The green-flag portfolio here is substantial. ';
+        if(ds.length===2) p+='Key strengths: '+ds[0]+' and '+ds[1]+'.';
+        else p+='The portfolio includes '+ds.slice(0,-1).join(', ')+', and '+ds[ds.length-1]+'.';
+        p+=' In a dating pool where the bar is famously subterranean, she clears it with room to spare on these dimensions.';
+      }
+    } else {
+      if(ds.length===1){
+        p='One green flag stands amid the wreckage: '+ds[0]+'. It is a single data point of hope in an otherwise turbulent dataset.';
+      } else {
+        p=pick(meta.i,seed)+' ';
+        if(ds.length===2) p+='Noted strengths: '+ds[0]+' and '+ds[1]+'.';
+        else p+='The portfolio includes '+ds.slice(0,-1).join(', ')+', and '+ds[ds.length-1]+'.';
+        p+=' '+pick(meta.c,seed);
+      }
+    }
+    paras.push(p);
   }
 
-  // Score-based closer
+  // ── Structure depends on score: lead with the dominant signal ──
+  if(isHighScore){
+    // HIGH SCORES: green flags first, red flags as footnotes
+    buildGreenPara();
+    if(redTags.length>0){
+      const allRedDescs=[];
+      redTags.forEach(tag=>{groups[tag].forEach(i=>allRedDescs.push(i.desc))});
+      if(allRedDescs.length===1)
+        paras.push('The file does contain one minor note — '+allRedDescs[0]+' — but in context, this registers as a charming quirk rather than a structural concern.');
+      else if(allRedDescs.length<=3)
+        paras.push('For the record, the dossier flags '+allRedDescs.join(' and ')+'. These are catalogued but ultimately cosmetic blemishes on an otherwise impressive specimen.');
+      else
+        paras.push('Minor infractions on file include '+allRedDescs.slice(0,3).join(', ')+', among others. None rise to the level of actionable concern given the overall assessment.');
+    }
+  } else {
+    // LOW/MID SCORES: red flags first, green flags as secondary
+    buildRedParas(2,4);
+    buildGreenPara();
+  }
+
+  // ── Score-based synthesis closer ──
   if(score<=0)
-    lines.push("This isn't dating. This is a cry for help.");
+    paras.push('Final clinical assessment: this is not a dating prospect — it is an incident report in the making. The recommended intervention is immediate and complete geographic relocation.');
   else if(score<20)
-    lines.push("Pack your bags. New city. New identity. Don't look back.");
+    paras.push('The aggregate data recommends the Witness Protection protocol: new city, new phone number, scorched-earth digital cleanse. This is not pessimism — it is actuarial science.');
+  else if(score<40)
+    paras.push(`With a composite score of ${score}, the risk rating would make any relationship underwriter nervous. She belongs, per the peer-reviewed literature, to the streets.`);
+  else if(score<60)
+    paras.push(`A score of ${score} places this squarely in uncertain territory — a holding pattern with no scheduled landing. Proceed with emotional guardrails firmly installed.`);
+  else if(score<80)
+    paras.push(`At ${score} points, the prospect shows real potential tempered by non-trivial risk factors. The recommendation: proceed with eyes open and expectations carefully calibrated.`);
   else if(score>=95&&greens.length>=5)
-    lines.push("Lock. Her. Down. Yesterday.");
+    paras.push('Final assessment: the data is unequivocal. This individual exceeds benchmark expectations across multiple dimensions. The peer-reviewed recommendation, stated with full academic conviction: lock it down. Immediately.');
+  else if(score>=80)
+    paras.push('The composite score indicates a high-quality match with tolerable deviations from the theoretical ideal. In portfolio terms: strong hold with bullish long-term outlook.');
 
-  return lines.slice(0,4).join(" ");
+  return paras.slice(0,4).join('<br><br>');
+}
+
+// ── AI Profile via Groq API ──
+async function generateAIProfile(){
+  const score=calcScore();
+  const {reds,greens}=getCheckedTraits();
+  const allTraits=[...reds,...greens];
+  if(allTraits.length===0) return null;
+
+  const traitLines=allTraits.map(t=>{
+    const meta=T[t.name];
+    const desc=meta?` — ${meta.d}`:'';
+    return `- ${t.name} (${t.cat}, ${t.pts>0?'+':''}${t.pts}pts)${desc}`;
+  }).join('\n');
+
+  const tier=getTier(score);
+  const toneGuide=score>=95?'Write as if filing an urgent recommendation to not let this one get away. Every red flag is a charming quirk. Final line: emphatic lock-it-down.'
+    :score>=80?'Write a glowing review with 1-2 wry footnotes about minor red flags. Final line: strong endorsement.'
+    :score>=60?'Balanced analysis. Green flags get credit, red flags get dry commentary. Final line: cautious optimism.'
+    :score>=40?'Skeptical analyst. Red flags dominate the narrative. Green flags are noted but insufficient. Final line: advise caution.'
+    :'Full roast. Green flags are ironic consolation prizes. Final line: exit strategy.';
+
+  const bannedNote=score>=80?' BANNED phrases — do NOT use any of these: "paradox", "situationship", "proceed at your own risk", "mixed signals", "proceed with caution", "double-edged sword". The score is high — there is no ambiguity.':'';
+
+  const scoreFraming=score>100
+    ?`Score: ${score} out of 100 base (scores above 100 mean green flags outweigh all red flags — this is an exceptional result)`
+    :`Score: ${score} out of 100`;
+
+  const systemPrompt=`You are a dry, clinical dating analyst writing personality profiles with bone-dry wit. Write in third person referring to "the subject." No emojis. No markdown. No bullet points. Flowing prose only.
+
+STRUCTURE (follow exactly):
+- Paragraph 1: Lead with the DOMINANT signal. If green flags outweigh red flags, open with what makes the subject impressive. If red flags dominate, open with the primary concerns.
+- Paragraph 2: Address the MINORITY flags as secondary notes. For high scorers, red flags are minor footnotes. For low scorers, green flags are small consolation.
+- Final sentence: ONE clear clinical recommendation. Pick a single direction — do not hedge with "but" or contradict yourself. The recommendation must match the score.
+
+CRITICAL RULES:
+- The entire profile must express ONE coherent opinion. Do not praise in one sentence and warn in the next.
+- Every sentence must reinforce the same overall verdict — not alternate between positive and negative.${bannedNote}`;
+
+  const exampleBlock=score>=80?`
+
+EXAMPLE of correct high-score style (do NOT copy verbatim — use as tone reference only):
+"The subject presents a remarkably clean dossier. Her ability to hold a conversation without checking her phone suggests either genuine interest or an expired data plan — either way, the result is the same. The minor infractions on file — an enthusiasm for astrology, a suspicious number of throw pillows — are catalogued but ultimately irrelevant to the final assessment. Clinical recommendation: this is not a drill. Secure commitment at earliest opportunity."
+`:'';
+
+  const userPrompt=`Write a personality profile for this date.
+
+${scoreFraming}
+Tier: "${tier.label}" — "${tier.msg}"
+
+Red flags (${reds.length}):
+${reds.length?reds.map(t=>{const m=T[t.name];return `- ${t.name} (${t.pts}pts)${m?' — '+m.d:''}`}).join('\n'):'None'}
+
+Green flags (${greens.length}):
+${greens.length?greens.map(t=>{const m=T[t.name];return `- ${t.name} (+${t.pts}pts)${m?' — '+m.d:''}`}).join('\n'):'None'}
+
+Tone guidance: ${toneGuide}${exampleBlock}
+
+Write 2-4 paragraphs, under 250 words. Be specific about the traits listed — reference them directly with dry analytical humor. End with ONE clear clinical recommendation that matches the score. Do not contradict yourself.`;
+
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),15000);
+
+  try{
+    const res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+GROQ_API_KEY
+      },
+      body:JSON.stringify({
+        model:'llama-3.3-70b-versatile',
+        messages:[
+          {role:'system',content:systemPrompt},
+          {role:'user',content:userPrompt}
+        ],
+        temperature:0.55,
+        max_tokens:500
+      }),
+      signal:controller.signal
+    });
+    clearTimeout(timeout);
+    if(!res.ok) throw new Error('API '+res.status);
+    const data=await res.json();
+    const text=data.choices?.[0]?.message?.content;
+    if(!text) throw new Error('Empty response');
+    return text.trim().replace(/\n\n/g,'<br><br>').replace(/\n/g,'<br><br>');
+  }catch(e){
+    clearTimeout(timeout);
+    console.warn('AI profile failed:',e.message);
+    return null;
+  }
+}
+
+function getProfileText(){
+  const raw=cachedAIProfile||generateProfile();
+  return raw?raw.replace(/<br><br>/g,'\n\n'):'';
 }
 
 // ── Render ──
@@ -506,7 +841,7 @@ function render(){
       <div class="top-bar">
         <div class="top-bar-inner">
           <div class="step-indicator">${stepNum} of ${TOTAL_STEPS}</div>
-          <div class="mini-score" id="mini-score-${stepNum}">${calcScore()}</div>
+          <div class="mini-score" id="mini-score-${stepNum}">${Math.max(0,Math.min(100,calcScore()))}</div>
           <div class="progress-dots">${DATA.map((_,i)=>{
             const s=i+1;
             let cls='dot';
@@ -514,7 +849,7 @@ function render(){
             else if(i===DATA.length-1) cls+=' green-dot';
             if(s<stepNum) cls+=' completed';
             else if(s===stepNum) cls+=' current';
-            return `<div class="${cls}"></div>`;
+            return `<div class="${cls}" onclick="event.stopPropagation();goTo(${s})"></div>`;
           }).join('')}</div>
         </div>
       </div>
@@ -554,7 +889,7 @@ function render(){
     const score=calcScore();
     const tier=getTier(score);
     const {reds,greens}=getCheckedTraits();
-    const profile=generateProfile();
+    const fallbackProfile=generateProfile();
 
     // Category breakdown data
     const breakdownHTML=DATA.map((cat,ci)=>{
@@ -575,7 +910,7 @@ function render(){
     html+=`<div class="step active" id="step-${resultsStep}">
       <div class="results">
         <div class="results-score">
-          <div class="big-score count-up" style="color:${tier.color}">${score}</div>
+          <div class="big-score count-up" style="color:${tier.color}">${Math.max(0,Math.min(100,score))}</div>
           <div class="tier-label" style="color:${tier.color}">${tier.label}</div>
           <div class="verdict-msg">"${tier.msg}"</div>
         </div>
@@ -585,9 +920,18 @@ function render(){
           ${breakdownHTML}
         </div>`:''}
 
-        ${profile?`<div class="section-card">
+        ${(fallbackProfile||cachedAIProfile)?`<div class="section-card">
           <h3>Personality Profile</h3>
-          <div class="profile-text">${profile}</div>
+          ${cachedAIProfile
+            ?`<div class="profile-text profile-fade-in" id="profile-text">${cachedAIProfile}</div>`
+            :GROQ_API_KEY
+              ?`<div class="profile-loading" id="profile-loading">
+                  <div class="loading-spinner"></div>
+                  <span>Generating AI profile…</span>
+                </div>
+                <div class="profile-text" id="profile-text" style="display:none">${fallbackProfile}</div>`
+              :`<div class="profile-text" id="profile-text">${fallbackProfile}</div>`
+          }
         </div>`:''}
 
         <div class="section-card">
@@ -630,6 +974,7 @@ function render(){
           </div>
         </div>
         <div class="btn-row">
+          <button class="btn btn-back" onclick="goTo(${TOTAL_STEPS})">Back to Questions</button>
           <button class="btn btn-reset" onclick="resetAll()">Start Over</button>
         </div>
 
@@ -649,15 +994,46 @@ function render(){
     el.addEventListener('mouseleave',()=>el.classList.remove('show-tip'));
     el.addEventListener('touchstart',()=>el.classList.toggle('show-tip'),{passive:true});
   });
+
+  // AI profile async trigger
+  const resultsActive=currentStep===TOTAL_STEPS+1;
+  if(resultsActive&&!cachedAIProfile&&!aiProfilePending&&GROQ_API_KEY){
+    aiProfilePending=true;
+    generateAIProfile().then(result=>{
+      aiProfilePending=false;
+      const loader=document.getElementById('profile-loading');
+      const el=document.getElementById('profile-text');
+      if(result){
+        cachedAIProfile=result;
+        if(loader) loader.remove();
+        if(el){el.innerHTML=result;el.style.display='';el.classList.add('profile-fade-in');}
+      }else{
+        if(loader) loader.remove();
+        if(el) el.style.display='';
+      }
+    });
+  }
 }
 
 function toggleTrait(el,key){
   checked[key]=!checked[key];
-  // Re-render to update scores everywhere
-  render();
+  const on=checked[key];
+  // Toggle checked class and checkbox directly
+  if(on) el.classList.add('checked'); else el.classList.remove('checked');
+  el.querySelector('input').checked=on;
+  el.querySelector('.checkmark').innerHTML=on?'&#10003;':'';
+  // Update mini-score with pulse animation
+  const ms=document.getElementById('mini-score-'+currentStep);
+  if(ms){
+    ms.textContent=Math.max(0,Math.min(100,calcScore()));
+    ms.classList.remove('score-flash');
+    void ms.offsetWidth;
+    ms.classList.add('score-flash');
+  }
 }
 
 function goTo(step){
+  cachedAIProfile=null;
   currentStep=step;
   render();
   window.scrollTo({top:0,behavior:'instant'});
@@ -665,6 +1041,8 @@ function goTo(step){
 
 function resetAll(){
   Object.keys(checked).forEach(k=>delete checked[k]);
+  cachedAIProfile=null;
+  aiProfilePending=false;
   currentStep=0;
   render();
 }
@@ -674,8 +1052,8 @@ const SITE_URL='https://bro-xuan.github.io/date-scoring/';
 function getShareText(){
   const score=calcScore();
   const tier=getTier(score);
-  const profile=generateProfile();
-  let text=`DATE SCORE: ${score}/100 — ${tier.label}\n"${tier.msg}"\n\n`;
+  const profile=getProfileText();
+  let text=`DATE SCORE: ${Math.max(0,Math.min(100,score))} — ${tier.label}\n"${tier.msg}"\n\n`;
   if(profile) text+=profile+'\n\n';
   text+=`Rate your date: ${SITE_URL}`;
   return text;
@@ -685,8 +1063,8 @@ function getFullText(){
   const score=calcScore();
   const tier=getTier(score);
   const {reds,greens}=getCheckedTraits();
-  const profile=generateProfile();
-  let text=`DATE SCORE: ${score}/100 — ${tier.label}\n"${tier.msg}"\n\n`;
+  const profile=getProfileText();
+  let text=`DATE SCORE: ${Math.max(0,Math.min(100,score))} — ${tier.label}\n"${tier.msg}"\n\n`;
   if(profile) text+=profile+'\n\n';
   if(reds.length) text+=`🚩 Red Flags: ${reds.map(r=>r.name).join(', ')}\n`;
   if(greens.length) text+=`✅ Green Flags: ${greens.map(g=>g.name).join(', ')}\n`;
@@ -702,7 +1080,9 @@ function flashBtn(btn,msg){
 }
 
 function shareToX(){
-  const text=getShareText();
+  const score=Math.max(0,Math.min(100,calcScore()));
+  const tier=getTier(calcScore());
+  const text=`DATE SCORE: ${score} — ${tier.label}\n"${tier.msg}"\n\nRate your date: ${SITE_URL}`;
   const url='https://x.com/intent/tweet?text='+encodeURIComponent(text);
   window.open(url,'_blank','noopener');
 }
